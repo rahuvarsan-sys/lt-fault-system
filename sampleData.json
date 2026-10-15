@@ -1,0 +1,52 @@
+{
+  "transformer": {
+    "voltage": {
+      "R": null,
+      "Y": null,
+      "B": null
+    },
+    "current": {
+      "R": null,
+      "Y": null,
+      "B": null
+    },
+    "power": {
+      "active": null,
+      "reactive": null,
+      "apparent": null
+    },
+    "powerFactor": null,
+    "frequency": null,
+    "energy": null,
+    "loadPercent": null,
+    "temperature": null,
+    "healthIndex": null
+  },
+  "flameSensor": {
+    "status": "No data",
+    "intensity": null,
+    "threshold": 70,
+    "lastDetectedAt": null
+  },
+  "vibrationSensor": {
+    "status": "No data",
+    "level": null,
+    "threshold": 50,
+    "lastDetectedAt": null
+  },
+  "faults": [],
+  "alerts": [],
+  "nodes": [],
+  "relayStatus": "OFF",
+  "tapPosition": 0,
+  "locationState": {
+    "faultArea": "No data",
+    "faultDistanceKm": null,
+    "nearestNode": "No data"
+  },
+  "energyRecords": [],
+  "isTelemetryCleared": true,
+  "devices": [],
+  "currentDeviceId": null,
+  "telemetryHistory": []
+}
