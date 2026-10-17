@@ -490,7 +490,7 @@ function renderHome() {
       <div>
         <div class="pill">Smart transformer monitoring • AI assisted</div>
         <h1>Smart Transformer Digital Twin for TNEB</h1>
-        <p>The digital twin simulates LT line behavior, monitors voltage and current signals, and identifies faults instantly for resilient power delivery.</p>
+        <p>The digital twin monitors live voltage and current signals from connected hardware and identifies faults for resilient power delivery.</p>
       </div>
       <div class="panel">
         <div class="label-row">
@@ -506,8 +506,8 @@ function renderHome() {
       <div class="metric-card"><h4>Current</h4><div class="value">${renderCurrent()}</div><div class="sub">Single-phase current</div></div>
       <div class="metric-card"><h4>Health Index</h4><div class="value">${displayValue(state.telemetry?.transformer?.healthIndex)}</div><div class="sub">Transformer condition score</div></div>
       <div class="metric-card"><h4>Fault Area</h4><div class="value">${renderFaultArea()}</div><div class="sub">Nearest node ${renderNearestNode()}</div></div>
-      <div class="metric-card"><h4>Flame Sensor</h4><div class="value ${getFlameStatusClass(getFlameStatusText())}">${getFlameStatusText()}</div><div class="sub">Intensity ${state.telemetry?.flameSensor?.intensity ?? 0}% • Threshold ${state.telemetry?.flameSensor?.threshold ?? 70}%</div></div>
-      <div class="metric-card"><h4>Vibration Sensor</h4><div class="value ${getVibrationStatusClass(getVibrationStatusText())}">${getVibrationStatusText()}</div><div class="sub">Level ${state.telemetry?.vibrationSensor?.level ?? 0}% • Threshold ${state.telemetry?.vibrationSensor?.threshold ?? 50}%</div></div>
+      <div class="metric-card"><h4>Flame Sensor</h4><div class="value ${getFlameStatusClass(getFlameStatusText())}">${getFlameStatusText()}</div><div class="sub">Intensity ${displayValue(state.telemetry?.flameSensor?.intensity, '%')} • Threshold ${displayValue(state.telemetry?.flameSensor?.threshold, '%')}</div></div>
+      <div class="metric-card"><h4>Vibration Sensor</h4><div class="value ${getVibrationStatusClass(getVibrationStatusText())}">${getVibrationStatusText()}</div><div class="sub">Level ${displayValue(state.telemetry?.vibrationSensor?.level, '%')} • Threshold ${displayValue(state.telemetry?.vibrationSensor?.threshold, '%')}</div></div>
     </div>
     <div class="grid grid-2" style="margin-top:16px">
       <div class="panel chart-card">
@@ -529,9 +529,9 @@ function renderDashboard() {
   const section = createElement('div');
   section.innerHTML = `
     <div class="grid grid-4">
-      <div class="metric-card"><h4>Active Power</h4><div class="value">${displayValue(state.telemetry?.transformer?.power?.active, ' kW')}</div></div>
-      <div class="metric-card"><h4>Reactive Power</h4><div class="value">${displayValue(state.telemetry?.transformer?.power?.reactive, ' kVAr')}</div></div>
-      <div class="metric-card"><h4>Apparent Power</h4><div class="value">${displayValue(state.telemetry?.transformer?.power?.apparent, ' kVA')}</div></div>
+      <div class="metric-card"><h4>Active Power</h4><div class="value">${displayPower(state.telemetry?.transformer?.power?.active, 'W')}</div></div>
+      <div class="metric-card"><h4>Reactive Power</h4><div class="value">${displayPower(state.telemetry?.transformer?.power?.reactive, 'VAr')}</div></div>
+      <div class="metric-card"><h4>Apparent Power</h4><div class="value">${displayPower(state.telemetry?.transformer?.power?.apparent, 'VA')}</div></div>
       <div class="metric-card"><h4>Power Factor</h4><div class="value">${displayValue(state.telemetry?.transformer?.powerFactor)}</div></div>
     </div>
     <div class="grid grid-2" style="margin-top:16px">
@@ -618,7 +618,7 @@ function renderTwin() {
   section.innerHTML = `
     <div class="grid grid-2">
       <div class="panel">
-        <div class="label-row"><strong>Transformer Digital Twin</strong><span class="status-pill green">Simulation Active</span></div>
+        <div class="label-row"><strong>Transformer Digital Twin</strong><span class="status-pill ${state.telemetry?.isTelemetryCleared ? 'blue' : 'green'}">${state.telemetry?.isTelemetryCleared ? 'Waiting for hardware' : 'Live hardware data'}</span></div>
         <div class="transformer-visual">
           <div class="transformer-box"></div>
           <div class="small">Relay: ${displayValue(state.telemetry?.relayStatus)} • Tap: ${displayValue(state.telemetry?.tapPosition)} • Load: ${displayValue(state.telemetry?.transformer?.loadPercent, '%')}</div>
@@ -743,7 +743,7 @@ function renderCharts() {
 
   const history = state.telemetry?.telemetryHistory || [];
   const labels = history.map((entry) => new Date(entry.timestamp).toLocaleTimeString());
-  const powerData = history.map((entry) => entry.power);
+  const powerData = history.map((entry) => entry.power == null ? null : Number(entry.power) * 1000);
   const energyData = history.map((entry) => entry.energy);
 
   state.charts.power = new Chart(powerCanvas, {
@@ -751,7 +751,7 @@ function renderCharts() {
     data: {
       labels,
       datasets: [{
-        label: 'Power (kW)',
+        label: 'Power (W)',
         data: powerData,
         borderColor: '#4BB0F2',
         backgroundColor: 'rgba(75, 176, 242, 0.18)',
@@ -784,6 +784,7 @@ function renderCharts() {
 }
 
 function renderVoltage() {
+  if (state.telemetry?.isTelemetryCleared) return '-- V';
   const v = state.telemetry?.transformer?.voltage;
   if (!v || v.R == null || Number.isNaN(Number(v.R))) {
     return '-- V';
@@ -792,16 +793,24 @@ function renderVoltage() {
 }
 
 function renderCurrent() {
+  if (state.telemetry?.isTelemetryCleared) return '-- A';
   const c = state.telemetry?.transformer?.current;
   if (!c || c.R == null || Number.isNaN(Number(c.R))) {
     return '-- A';
   }
-  return `${Number(c.R).toFixed(0)} A`;
+  return `${Number(c.R).toFixed(3)} A`;
 }
 
 function displayValue(value, suffix = '') {
-  if (value == null) return '--';
+  if (state.telemetry?.isTelemetryCleared || value == null) return '--';
   return `${value}${suffix}`;
+}
+
+function displayPower(powerKilounits, unit) {
+  if (state.telemetry?.isTelemetryCleared || powerKilounits == null || !Number.isFinite(Number(powerKilounits))) {
+    return '--';
+  }
+  return `${(Number(powerKilounits) * 1000).toFixed(2)} ${unit}`;
 }
 
 function renderFaultArea() {

@@ -1,7 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const state = require('./data/sampleData.json');
-const { isDeviceOnline } = require('./deviceStatus');
+const { isDeviceOnline, hasLiveTelemetry } = require('./deviceStatus');
+const { hasTelemetryReadings } = require('./telemetryPayload');
 
 test('default telemetry stays empty until hardware delivers live data', () => {
   assert.equal(state.transformer.voltage.R, null, 'Voltage should be blank before the board connects');
@@ -33,22 +34,49 @@ test('partial hardware payloads do not create false fault alarms', () => {
   assert.equal(hasCompleteLiveTelemetry(partial.transformer), false, 'Partial data should not be treated as valid live telemetry');
 });
 
+test('device registration metadata is not mistaken for a sensor reading', () => {
+  assert.equal(hasTelemetryReadings({ deviceName: 'ESP32' }), false);
+  assert.equal(hasTelemetryReadings({ transformer: {} }), false);
+  assert.equal(hasTelemetryReadings({ transformer: { voltage: { R: 230.5 } } }), true);
+  assert.equal(hasTelemetryReadings({ flameSensor: { intensity: 0 } }), true);
+  assert.equal(hasTelemetryReadings({ flameSensor: { intensity: false } }), false);
+  assert.equal(hasTelemetryReadings({ transformer: { voltage: { R: '' } } }), false);
+});
+
+test('only a recent sensor reading from an online board counts as live telemetry', () => {
+  const now = Date.parse('2026-10-16T08:34:08.361Z');
+  assert.equal(hasLiveTelemetry([], now), false);
+  assert.equal(hasLiveTelemetry([{ status: 'Online' }], now), false);
+  assert.equal(hasLiveTelemetry([{
+    status: 'Online',
+    lastTelemetryAt: '2026-10-16T08:34:00.000Z'
+  }], now), true);
+  assert.equal(hasLiveTelemetry([{
+    status: 'Online',
+    lastTelemetryAt: '2026-10-16T08:33:50.000Z'
+  }], now), false);
+  assert.equal(hasLiveTelemetry([{
+    status: 'Offline',
+    lastTelemetryAt: '2026-10-16T08:34:00.000Z'
+  }], now), false);
+});
+
 test('a recent device heartbeat restores online status after an earlier offline mark', () => {
-  const now = Date.parse('2026-10-16T08:36:25.588Z');
+  const now = Date.parse('2026-10-16T08:34:08.361Z');
   const device = {
     status: 'Offline',
-    lastSeen: '2026-10-16T08:33:58.361Z'
+    lastSeen: '2026-10-16T08:34:00.000Z'
   };
 
   assert.equal(isDeviceOnline(device, now), true, 'A fresh heartbeat should override a stale offline status');
 });
 
-test('a device with no heartbeat for more than 15 minutes is offline', () => {
-  const now = Date.parse('2026-10-16T08:50:00.000Z');
+test('a device with no heartbeat for more than 15 seconds is offline', () => {
+  const now = Date.parse('2026-10-16T08:34:14.000Z');
   const device = {
     status: 'Online',
     lastSeen: '2026-10-16T08:33:58.361Z'
   };
 
-  assert.equal(isDeviceOnline(device, now), false, 'A heartbeat older than 15 minutes should be offline');
+  assert.equal(isDeviceOnline(device, now), false, 'A heartbeat older than 15 seconds should be offline');
 });

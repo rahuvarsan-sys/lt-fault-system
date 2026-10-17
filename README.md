@@ -31,11 +31,11 @@ returning 404 for API requests.
 3. Set `ssid` and `password` in the sketch, upload it to the ESP32, and open the serial monitor at 115200 baud.
 4. Allow Node.js through the computer's firewall on the private network, then open `http://localhost:4001` and sign in. The ESP32 posts readings to `/api/esp32/data` every five seconds; the website receives server updates live.
 
-The voltage and current conversions in the sketch are initial estimates. Calibrate them for the specific sensor modules and wiring before relying on the displayed measurements. Never connect mains voltage directly to an ESP32.
+The sketch samples both AC waveforms to calculate RMS current and real power, so a low-wattage bulb is not rounded down to zero amps. The current sensitivity is set for the ACS712 5 A version (185 mV/A); change `acs712SensitivityMillivoltsPerAmp` to `100` or `66` for the 20 A or 30 A versions. `voltageCalibrationVoltsPerCount` is an initial estimate: compare the displayed voltage against a suitable true-RMS meter and adjust this constant for the installed ZMPT101B module. The ACS712 output sensitivity must reflect any voltage divider used between the sensor and ESP32. Make sure all ESP32 analog inputs stay within 0–3.3 V, and never connect mains voltage directly to an ESP32. The website reports measured real power in watts; calibration and sensor accuracy are required for a 9 W bulb reading to be reliable. The dashboard stays blank until the ESP32 sends fresh sensor data and clears readings after 15 seconds without updates.
 
 ## Project structure
 
-- backend/server.js — Express API with simulated telemetry, fault logic, and control endpoints
+- backend/server.js — Express API with live telemetry, fault logic, and control endpoints
 - backend/data/sampleData.json — demo state and initial users
 - backend/schema.sql — SQL schema for MySQL-based persistence
 - frontend/index.html — main UI shell

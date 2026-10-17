@@ -3,7 +3,9 @@ const cors = require('cors');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { isDeviceOnline } = require('./deviceStatus');
+const { isDeviceOnline, hasLiveTelemetry } = require('./deviceStatus');
+const { hasTelemetryReadings } = require('./telemetryPayload');
+const { mergePowerTelemetry } = require('./powerTelemetry');
 
 const app = express();
 const DEFAULT_PORT = 4001;
@@ -23,7 +25,7 @@ function startServerOnNextPort(portIndex = 0) {
   const server = app.listen(port, () => {
     started = true;
     console.log(`TNEB digital twin server running at http://localhost:${port}`);
-    setInterval(simulateTelemetry, 4000);
+    setInterval(refreshTelemetrySnapshot, 4000);
   });
 
   server.on('error', (error) => {
@@ -147,37 +149,21 @@ function retainRecentTelemetryHistory() {
   });
 }
 
-function getPrototypeLiveTelemetry() {
-  const currentBase = 4.8;
-  return {
-    voltage: { R: 12, Y: 12, B: 12 },
-    current: { R: currentBase, Y: 3.6, B: 5.4 },
-    power: { active: 0.058, reactive: 0.01, apparent: 0.058 },
-    powerFactor: 0.96,
-    frequency: 50,
-    energy: 0.2,
-    loadPercent: 28,
-    temperature: 32,
-    healthIndex: 90
-  };
-}
-
 function refreshDeviceConnectivity() {
   state.devices = (state.devices || []).map((device) => ({
     ...device,
     status: isDeviceOnline(device) ? 'Online' : 'Offline'
   }));
 
-  const hasOnlineDevice = (state.devices || []).some((device) => device.status === 'Online');
-  if (!hasOnlineDevice) {
+  if (!hasLiveTelemetry(state.devices)) {
+    const cleared = createClearedTelemetryState();
     state.isTelemetryCleared = true;
-    state.currentDeviceId = null;
     state.faults = [];
     state.alerts = [];
-    state.locationState = { faultArea: 'No data', faultDistanceKm: null, nearestNode: 'No data' };
-    state.transformer = createClearedTelemetryState().transformer;
-    state.flameSensor = { status: 'No data', intensity: null, threshold: 70, lastDetectedAt: null };
-    state.vibrationSensor = { status: 'No data', level: null, threshold: 50, lastDetectedAt: null };
+    state.locationState = cleared.locationState;
+    state.transformer = cleared.transformer;
+    state.flameSensor = cleared.flameSensor;
+    state.vibrationSensor = cleared.vibrationSensor;
     state.telemetryHistory = [];
     return;
   }
@@ -194,10 +180,6 @@ function refreshDeviceConnectivity() {
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
-}
-
-function randomBetween(min, max) {
-  return Math.random() * (max - min) + min;
 }
 
 function hasCompleteLiveTelemetry(transformer) {
@@ -406,86 +388,8 @@ function registerDevice(deviceInfo, telemetryReceived = false) {
   return registeredDevice || newDevice;
 }
 
-function simulateTelemetry() {
+function refreshTelemetrySnapshot() {
   refreshDeviceConnectivity();
-
-  if (state.isTelemetryCleared) {
-    broadcastSnapshot();
-    return;
-  }
-
-  const currentDevice = state.devices.find((device) => device.id === state.currentDeviceId);
-  if (currentDevice?.lastTelemetryAt) {
-    broadcastSnapshot();
-    return;
-  }
-
-  const demo = getPrototypeLiveTelemetry();
-  state.transformer = {
-    ...state.transformer,
-    ...demo,
-    voltage: demo.voltage,
-    current: demo.current,
-    power: demo.power,
-    healthIndex: demo.healthIndex
-  };
-
-  state.flameSensor = {
-    status: 'Safe',
-    intensity: 18,
-    threshold: 70,
-    lastDetectedAt: null
-  };
-
-  state.vibrationSensor = {
-    status: 'Normal',
-    level: 15,
-    threshold: 50,
-    lastDetectedAt: null
-  };
-
-  state.faults = [
-    {
-      type: 'Undervoltage',
-      severity: 'Medium',
-      description: 'Slight voltage dip on the small prototype feeder.',
-      location: 'Feeder A'
-    },
-    {
-      type: 'Overvoltage',
-      severity: 'Medium',
-      description: 'Brief voltage rise above the small prototype safe band.',
-      location: 'Feeder B'
-    },
-    {
-      type: 'Short Circuit',
-      severity: 'High',
-      description: 'Small prototype indicates a brief short-circuit event.',
-      location: 'LT Feeder R1'
-    }
-  ];
-  state.alerts = state.faults.map((fault, index) => ({
-    id: Date.now() + index,
-    type: fault.type,
-    severity: fault.severity,
-    message: `${fault.type}: ${fault.description}`,
-    location: fault.location,
-    area: 'Substation',
-    distanceKm: 0,
-    createdAt: new Date().toISOString()
-  }));
-  state.locationState = { faultArea: 'Feeder A', faultDistanceKm: 0, nearestNode: 'Substation' };
-  state.telemetryHistory = [
-    ...(state.telemetryHistory || []),
-    {
-      timestamp: new Date().toISOString(),
-      power: demo.power.active,
-      energy: demo.energy
-    }
-  ];
-  retainRecentTelemetryHistory();
-
-  persistState();
   broadcastSnapshot();
 }
 
@@ -627,8 +531,8 @@ app.get('/api/telemetry/stream', (req, res) => {
 });
 
 app.post('/api/sensor-data', (req, res) => {
-  const incoming = req.body;
-  state.isTelemetryCleared = false;
+  const incoming = req.body || {};
+  const hasReadings = hasTelemetryReadings(incoming);
   if (incoming.transformer) {
     state.transformer = {
       ...state.transformer,
@@ -638,14 +542,25 @@ app.post('/api/sensor-data', (req, res) => {
       power: { ...(state.transformer.power || {}), ...(incoming.transformer.power || {}) }
     };
   }
+  const voltage = Number(state.transformer.voltage?.R || 0);
+  const current = Number(state.transformer.current?.R || 0);
+  state.transformer.power = mergePowerTelemetry(
+    state.transformer.power,
+    incoming.transformer?.power,
+    voltage,
+    current
+  );
   if (incoming.flameSensor) {
     state.flameSensor = { ...(state.flameSensor || { status: 'Safe', intensity: 0, threshold: 70, lastDetectedAt: null }), ...incoming.flameSensor };
   }
   if (incoming.vibrationSensor) {
     state.vibrationSensor = { ...(state.vibrationSensor || { status: 'Normal', level: 0, threshold: 50, lastDetectedAt: null }), ...incoming.vibrationSensor };
   }
-  if (incoming.deviceName || incoming.ipAddress || incoming.name || incoming.ip) {
-    registerDevice(incoming, true);
+  if (hasReadings || incoming.deviceName || incoming.ipAddress || incoming.name || incoming.ip) {
+    registerDevice(incoming, hasReadings);
+  }
+  if (hasReadings) {
+    state.isTelemetryCleared = false;
   }
   state.transformer.healthIndex = calculateHealthIndex(state.transformer);
   state.faults = detectFaults(state.transformer);
@@ -670,13 +585,14 @@ app.post('/api/esp32/register', (req, res) => {
     createdAt: new Date().toISOString()
   });
   state.alerts = state.alerts.slice(0, 8);
-  simulateTelemetry();
+  refreshTelemetrySnapshot();
   res.json({ ok: true, device, snapshot: buildSnapshot() });
 });
 
 app.post('/api/esp32/data', (req, res) => {
   const incoming = req.body || {};
-  const device = registerDevice(incoming, true);
+  const hasReadings = hasTelemetryReadings(incoming);
+  const device = registerDevice(incoming, hasReadings);
 
   if (incoming.flameSensor) {
     state.flameSensor = { ...(state.flameSensor || { status: 'Safe', intensity: 0, threshold: 70, lastDetectedAt: null }), ...incoming.flameSensor };
@@ -693,26 +609,28 @@ app.post('/api/esp32/data', (req, res) => {
       power: { ...(state.transformer.power || {}), ...(incoming.transformer.power || {}) }
     };
   }
-  state.isTelemetryCleared = false;
+  if (hasReadings) {
+    state.isTelemetryCleared = false;
+  }
   const voltage = Number(state.transformer.voltage?.R || 0);
   const current = Number(state.transformer.current?.R || 0);
-  if (voltage > 0 && current > 0) {
-    const activePower = parseFloat((voltage * current / 1000).toFixed(3));
-    state.transformer.power = {
-      ...(state.transformer.power || {}),
-      active: activePower,
-      apparent: activePower
-    };
+  state.transformer.power = mergePowerTelemetry(
+    state.transformer.power,
+    incoming.transformer?.power,
+    voltage,
+    current
+  );
+  if (hasReadings) {
+    state.telemetryHistory = [
+      ...(state.telemetryHistory || []),
+      {
+        timestamp: new Date().toISOString(),
+        power: state.transformer.power?.active ?? null,
+        energy: state.transformer.energy ?? null
+      }
+    ];
+    retainRecentTelemetryHistory();
   }
-  state.telemetryHistory = [
-    ...(state.telemetryHistory || []),
-    {
-      timestamp: new Date().toISOString(),
-      power: state.transformer.power?.active || null,
-      energy: state.transformer.energy || null
-    }
-  ];
-  retainRecentTelemetryHistory();
   if (incoming.relayStatus) {
     state.relayStatus = incoming.relayStatus;
   }
